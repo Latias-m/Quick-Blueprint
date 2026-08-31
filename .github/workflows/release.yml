@@ -1,0 +1,50 @@
+name: Release Factorio mod
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate release version
+        id: mod
+        shell: bash
+        run: |
+          name="$(jq -r '.name' info.json)"
+          version="$(jq -r '.version' info.json)"
+
+          test -n "$name" && test "$name" != "null"
+          test -n "$version" && test "$version" != "null"
+          test "$GITHUB_REF_NAME" = "v$version"
+
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "package=$name"_"$version" >> "$GITHUB_OUTPUT"
+
+      - name: Package mod
+        shell: bash
+        run: |
+          package="${{ steps.mod.outputs.package }}"
+          mkdir -p "dist/$package"
+          git archive --format=tar HEAD | tar -x -C "dist/$package"
+          (
+            cd dist
+            zip -r "$package.zip" "$package"
+          )
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE: dist/${{ steps.mod.outputs.package }}.zip
+          VERSION: ${{ steps.mod.outputs.version }}
+        run: gh release create "$GITHUB_REF_NAME" "$PACKAGE" --title "Quick Blueprint $VERSION" --generate-notes

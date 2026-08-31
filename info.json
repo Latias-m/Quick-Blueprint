@@ -1,0 +1,9 @@
+{
+  "name": "Quick-Blueprint",
+  "version": "1.0.0",
+  "title": "Quick Blueprint",
+  "author": "AngelIkaros",
+  "description": "Adds a Quick Blueprint button to generate automated production-line blueprints from unlocked recipes, designed to consume a full input belt or fill a full output belt.",
+  "factorio_version": "2.0",
+  "dependencies": []
+}
