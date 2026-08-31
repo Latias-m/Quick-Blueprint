@@ -37,10 +37,20 @@ jobs:
           package="${{ steps.mod.outputs.package }}"
           mkdir -p "dist/$package"
           git archive --format=tar HEAD | tar -x -C "dist/$package"
-          (
-            cd dist
-            zip -r "$package.zip" "$package"
-          )
+          PACKAGE="$package" python3 - <<'PY'
+          from pathlib import Path
+          from zipfile import ZIP_DEFLATED, ZipFile
+          import os
+
+          package = os.environ["PACKAGE"]
+          source = Path("dist") / package
+          archive = Path("dist") / f"{package}.zip"
+
+          with ZipFile(archive, "w", ZIP_DEFLATED) as zip_file:
+              for path in source.rglob("*"):
+                  if path.is_file():
+                      zip_file.write(path, path.relative_to("dist").as_posix())
+          PY
 
       - name: Create GitHub Release
         env:
