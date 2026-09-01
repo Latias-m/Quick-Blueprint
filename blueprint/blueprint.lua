@@ -703,7 +703,7 @@ local function get_blueprint_entities(player, recipe_name)
 
   local temp_change = get_unit(config, true)
   for i = 1, machine_count do
-    if math.ceil(out_machine_full / 2) == i then
+    if math.ceil(out_machine_full / 2) == i and machine_count > math.ceil(out_machine_full / 2) then
       for index, value in ipairs(temp_change) do
         local copied_value = table.deepcopy(value)
         insert_entry(entities, copied_value, (i - 1) * max_x)
