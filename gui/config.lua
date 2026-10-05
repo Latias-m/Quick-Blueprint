@@ -5,6 +5,7 @@ local self = {}
 local START_NAME = common.MOD_NAME .. "-config-"
 local FRAME_NAME = START_NAME .. "-gui"
 local CLOSE_NAME = START_NAME .. "-close-button-"
+local RECIPE_BUTTON_NAME = START_NAME .. "-recipe-button"
 local CONFIRM_NAME = START_NAME .. "-confirm-button-"
 local MACHINE_BUTTON_NAME = START_NAME .. "-machine-button-"
 local TRANSPORT_BELT_BUTTON_NAME = START_NAME .. "-transport-belt-button-"
@@ -570,6 +571,47 @@ local function add_out_direction(player, frame)
     end)
 end
 
+local COUNT_MODE_ONE = {
+    name = "1",
+    caption = { "quick-blueprint.count-1" },
+    tooltip = { "quick-blueprint.count-1-tooltip" }
+}
+local COUNT_MODE_HALF = {
+    name = "half",
+    caption = { "quick-blueprint.count-half" },
+    tooltip = { "quick-blueprint.count-half-tooltip" }
+}
+local COUNT_MODE_FULL = {
+    name = "full",
+    caption = { "quick-blueprint.count-full" },
+    tooltip = { "quick-blueprint.count-full-tooltip" }
+}
+local COUNT_MODE_OUT_HALF = {
+    name = "out-half",
+    caption = { "quick-blueprint.count-out-half" },
+    tooltip = { "quick-blueprint.count-out-half-tooltip" }
+}
+local COUNT_MODE_COST_FULL = {
+    name = "cost-full",
+    caption = { "quick-blueprint.count-cost-full" },
+    tooltip = { "quick-blueprint.count-cost-full-tooltip" }
+}
+
+-- Which targets make sense depends on how the recipe's input cost compares to
+-- its output, so this is the set each recipe type is narrowed to.
+local COUNT_MODES_BY_RECIPE_TYPE = {
+    [1] = { COUNT_MODE_ONE },
+    out = { COUNT_MODE_ONE, COUNT_MODE_HALF, COUNT_MODE_FULL },
+    cost = { COUNT_MODE_ONE, COUNT_MODE_COST_FULL },
+    out_half = { COUNT_MODE_ONE, COUNT_MODE_OUT_HALF, COUNT_MODE_COST_FULL }
+}
+local DEFAULT_COUNT_MODE = {
+    [1] = "1",
+    out = "full",
+    cost = "cost-full",
+    out_half = "cost-full"
+}
+
 local function add_machine_count_selector(player, frame, recipe)
     local parent = frame.add({
         type = "flow",
@@ -588,27 +630,19 @@ local function add_machine_count_selector(player, frame, recipe)
         direction = "horizontal"
     }
 
-    local recipe_type = myRecipe.get_recipe_cost_machine_type(recipe)
-    local options_by_recipe_type = {
-        [1] = {
-            { name = "1", caption = { "quick-blueprint.count-1" }, tooltip = { "quick-blueprint.count-1-tooltip" } },
-        },
-        out = {
-            { name = "1", caption = { "quick-blueprint.count-1" }, tooltip = { "quick-blueprint.count-1-tooltip" } },
-            { name = "half", caption = { "quick-blueprint.count-half" }, tooltip = { "quick-blueprint.count-half-tooltip" } },
-            { name = "full", caption = { "quick-blueprint.count-full" }, tooltip = { "quick-blueprint.count-full-tooltip" } },
-        },
-        cost = {
-            { name = "1", caption = { "quick-blueprint.count-1" }, tooltip = { "quick-blueprint.count-1-tooltip" } },
-            { name = "cost-full", caption = { "quick-blueprint.count-cost-full" }, tooltip = { "quick-blueprint.count-cost-full-tooltip" } },
-        },
-        out_half = {
-            { name = "1", caption = { "quick-blueprint.count-1" }, tooltip = { "quick-blueprint.count-1-tooltip" } },
-            { name = "out-half", caption = { "quick-blueprint.count-out-half" }, tooltip = { "quick-blueprint.count-out-half-tooltip" } },
-            { name = "cost-full", caption = { "quick-blueprint.count-cost-full" }, tooltip = { "quick-blueprint.count-cost-full-tooltip" } },
-        },
-    }
-    local options = options_by_recipe_type[recipe_type] or options_by_recipe_type[1]
+    -- The row is there from the start instead of appearing partway through a
+    -- pick. Until there is a recipe only the targets that suit most recipes are
+    -- offered - "output half" and "input full" mean nothing before the recipe's
+    -- cost and output are known - and picking one narrows the row to the
+    -- targets that recipe type supports.
+    local recipe_type
+    local options
+    if recipe then
+        recipe_type = myRecipe.get_recipe_cost_machine_type(recipe)
+        options = COUNT_MODES_BY_RECIPE_TYPE[recipe_type] or COUNT_MODES_BY_RECIPE_TYPE[1]
+    else
+        options = COUNT_MODES_BY_RECIPE_TYPE.out
+    end
 
     local savekey = common.savekeys.selected_count_mode
     local saveval = common.get_storage_value(player, savekey)
@@ -617,13 +651,13 @@ local function add_machine_count_selector(player, frame, recipe)
         option_names[opt.name] = true
     end
     if not option_names[saveval] then
-        local default_count_modes = {
-            [1] = "1",
-            out = "full",
-            cost = "cost-full",
-            out_half = "cost-full"
-        }
-        saveval = default_count_modes[recipe_type] or "1"
+        saveval = DEFAULT_COUNT_MODE[recipe_type] or "1"
+        -- Only a chosen recipe type has a default worth keeping. Without a
+        -- recipe this row is a preview, and storing the fallback here would
+        -- overwrite a preference that other recipe types do use.
+        if recipe then
+            common.set_storage_value(player, savekey, saveval)
+        end
     end
 
     local group = {}
@@ -638,7 +672,6 @@ local function add_machine_count_selector(player, frame, recipe)
         table.insert(group, radio)
     end
 
-    common.set_storage_value(player, savekey, saveval)
     table.insert(event_list, function(event)
         if common.starts_with(event.element.name, COUNT_MODE_NAME) then
             local selected_name = common.get_selected_name(event.element.name, COUNT_MODE_NAME)
@@ -784,29 +817,133 @@ local header = frame.add({
     return frame
 end
 
-function self.open_gui(player, recipe_name)
-    local existing = player.gui.screen[FRAME_NAME]
-    if existing and existing.valid then
-        existing.destroy()
+-- The recipe is chosen with the game's own recipe selector - the same dialog
+-- the crafting menu and the item filter slots use - so it searches localized
+-- and internal names, groups the recipes, and keeps its own list of recent
+-- picks. Nothing here has to build a list or a filter.
+local function add_recipe_selector(frame, recipe_name)
+    local row = frame.add({
+        type = "flow",
+        direction = "horizontal"
+    })
+    row.style.vertical_align = "center"
+
+    row.add({
+        type = "label",
+        caption = { "quick-blueprint.select-unlocked-recipe" }
+    })
+
+    local recipe_button = row.add({
+        type = "choose-elem-button",
+        name = RECIPE_BUTTON_NAME,
+        elem_type = "recipe",
+        recipe = recipe_name,
+        elem_filters = myRecipe.get_recipe_elem_filters(),
+        tooltip = { "quick-blueprint.select-recipe-tooltip" }
+    })
+    recipe_button.style.size = 40
+end
+
+-- One menu. The recipe picker is its first row and the choices that do not
+-- depend on the recipe - belt, inserter, power, direction - are always there,
+-- so the window reads the same before and after a pick. Only the rows that are
+-- about the chosen recipe are filled in once there is one.
+local function build_window_content(player, frame, recipe_name)
+    local recipe = recipe_name and myRecipe.get_recipe_by_name(recipe_name)
+
+    add_recipe_selector(frame, recipe_name)
+
+    if recipe then
+        local module_container = add_machine_selector(player, frame, recipe)
+        refresh_module_selector(player, module_container, recipe)
+    else
+        frame.add({
+            type = "label",
+            caption = { "quick-blueprint.no-recipe-selected" }
+        })
     end
 
-    self.init()
-    local frame = add_header(player, recipe_name)
-    local recipe = myRecipe.get_recipe_by_name(recipe_name)
-    if not recipe then
-        log("[Quick Blueprint] Configuration window could not be opened: recipe not found: " .. tostring(recipe_name))
-        frame.destroy()
-        player.print({ "quick-blueprint.blueprint-generation-failed" })
-        return
-    end
-    local module_container = add_machine_selector(player, frame, recipe)
-    refresh_module_selector(player, module_container, recipe)
     add_transport_belt_selector(player, frame)
     add_inserter_selector(player, frame)
     add_electric_pole_selector(player, frame)
     add_out_direction(player, frame)
+    -- Built with no recipe too: it only needs the recipe for which targets to
+    -- offer, and a row that vanishes is worse than one that offers all of them.
     add_machine_count_selector(player, frame, recipe)
-    add_confirm_button(player, frame, recipe_name)
+
+    if recipe then
+        add_confirm_button(player, frame, recipe_name)
+    end
+end
+
+function self.open_gui(player, recipe_name)
+    -- Picking a recipe rebuilds the frame, so carry the position over instead
+    -- of snapping the window back to the middle of the screen mid-edit.
+    local previous_location
+    local existing = player.gui.screen[FRAME_NAME]
+    if existing and existing.valid then
+        previous_location = existing.location
+        existing.destroy()
+    end
+
+    -- A remembered recipe can be gone after a mod update, and the picker would
+    -- then draw nothing at all.
+    if recipe_name and not myRecipe.get_recipe_by_name(recipe_name) then
+        recipe_name = nil
+    end
+
+    self.init()
+    local frame = add_header(player, recipe_name)
+    build_window_content(player, frame, recipe_name)
+
+    if previous_location then
+        frame.auto_center = false
+        frame.location = previous_location
+    end
+
+    -- Registering the frame is what makes Escape close the window.
+    player.opened = frame
+end
+
+function self.open(event)
+    local player = game.get_player(event.player_index)
+    if not player or not player.valid then
+        return
+    end
+
+    self.open_gui(player, common.get_storage_value(player, common.savekeys.selected_recipe_name))
+end
+
+function self.handle_elem_changed(event)
+    local element = event.element
+    if not element or not element.valid or element.name ~= RECIPE_BUTTON_NAME then
+        return
+    end
+
+    local player = game.get_player(event.player_index)
+    if not player or not player.valid then
+        return
+    end
+
+    -- The picker is asked for unlocked recipes only. If a filter is ever not
+    -- applied the way it is asked for, a locked recipe still gets refused here
+    -- rather than silently reaching the blueprint generator.
+    local recipe_name = element.elem_value
+    if recipe_name then
+        local recipe = myRecipe.get_recipe_by_name(recipe_name)
+        if not recipe or not myRecipe.is_recipe_selectable(player, recipe) then
+            player.print({ "quick-blueprint.recipe-not-available" })
+            recipe_name = nil
+        end
+    end
+
+    common.set_storage_value(player, common.savekeys.selected_recipe_name, recipe_name)
+    self.open_gui(player, recipe_name)
+    return true
+end
+
+function self.is_frame(element)
+    return element and element.valid and element.name == FRAME_NAME
 end
 
 function self.handle_click(event)
