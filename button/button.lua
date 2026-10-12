@@ -27,7 +27,7 @@ end
 function self.handle_click(event)
   local element = event.element
   if element.name == BUTTON_NAME then
-    return "window.open"
+    return "config.open"
   end
 end
 

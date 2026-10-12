@@ -1,14 +1,14 @@
 local common = {
   MOD_NAME = "quick-blueprint",
   savekeys = {
+    selected_recipe_name = "selected_recipe_name",
     selected_machine_name = "selected_machine_name",
     selected_transport_belt_name = "selected_transport_belt_name",
     selected_inserter_name = "selected_inserter_name",
     selected_electric_pole_name = "selected_electric_pole_name",
     selected_direction = "selected_direction",
     selected_count_mode = "selected_count_mode",
-    selected_modules = "selected_modules",
-    recipe_name_list = "recipe_name_list"
+    selected_modules = "selected_modules"
   }
 }
 

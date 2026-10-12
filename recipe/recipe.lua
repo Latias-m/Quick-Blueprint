@@ -1,13 +1,11 @@
 local myRecipe = {}
-local common = require("common")
 local EXCLUDED_RECIPE_CATEGORIES = {
     ["transport-drone-request"] = true,
     ["transport-fluid-request"] = true,
     ["parameters"] = true
 }
 
-local filter = nil
-local grouped_recipes_cache = {}
+local recipe_elem_filters
 
 local function safe_get(value, key)
     if value == nil then
@@ -22,23 +20,6 @@ local function safe_get(value, key)
     return nil
 end
 
-local function is_excluded_recipe(player, recipe)
-    local categories = myRecipe.get_recipe_categories(recipe)
-    for _, category in ipairs(categories) do
-        if EXCLUDED_RECIPE_CATEGORIES[category] then
-            return true
-        end
-    end
-
-    if filter and filter ~= "" then
-        local recipe_name_list = common.get_storage_value(player, common.savekeys.recipe_name_list) or {}
-        local recipe_name = safe_get(recipe, "name")
-        local local_name = recipe_name_list[recipe_name]
-        return not (local_name and string.find(string.lower(local_name), string.lower(filter), 1, true) ~= nil)
-    end
-
-    return false
-end
 local function get_belt_throughput(belt_name)
     local proto = prototypes.entity[belt_name]
     if not proto or not proto.belt_speed then
@@ -173,161 +154,41 @@ local function is_recipe_unlocked(player, recipe_name)
     local force_recipe = player.force and player.force.recipes and player.force.recipes[recipe_name]
     return force_recipe and force_recipe.enabled
 end
-local function spairs(t, order)
-    if order == nil then return pairs(t) end
-    local keys = {}
-    for k in pairs(t) do keys[#keys + 1] = k end
-    pcall(function()
-        table.sort(keys, function(a, b) return order(t, a, b) end)
-    end)
-    local i = 0
-    return function()
-        i = i + 1
-        if keys[i] then
-            return keys[i], t[keys[i]]
+
+-- Whether the player may pick this recipe at all: it has to be unlocked for
+-- their force, must not be hidden, and must not be one of the pseudo-crafting
+-- categories that never describe a production line.
+function myRecipe.is_recipe_selectable(player, recipe)
+    if not recipe or recipe.hidden or not is_recipe_unlocked(player, recipe.name) then
+        return false
+    end
+
+    for _, category in ipairs(myRecipe.get_recipe_categories(recipe)) do
+        if EXCLUDED_RECIPE_CATEGORIES[category] then
+            return false
         end
     end
+
+    return true
 end
 
-function myRecipe.get_unlocked_recipes(player)
-    if not player or not player.valid then
-        return {}
-    end
-
-    grouped_recipes_cache = {}
-
-    local group_info = {}
-    local subgroup_info = {}
-    for name, recipe in pairs(prototypes.recipe) do
-        if recipe and recipe.name and is_recipe_unlocked(player, name) and not recipe.hidden and not is_excluded_recipe(player, recipe) then
-            if grouped_recipes_cache[recipe.group.name] == nil then
-                grouped_recipes_cache[recipe.group.name] = {}
-                group_info[recipe.group.name] = recipe.group
-            end
-            if grouped_recipes_cache[recipe.group.name][recipe.subgroup.name] == nil then
-                grouped_recipes_cache[recipe.group.name][recipe.subgroup.name] = {}
-            end
-            subgroup_info[recipe.subgroup.name] = recipe.subgroup
-
-            table.insert(grouped_recipes_cache[recipe.group.name][recipe.subgroup.name], recipe)
-        end
-    end
-
-    local sorted_groups = {}
-
-    for group_name, subgroup_map in spairs(grouped_recipes_cache, function(t, a, b)
-        return group_info[a].order < group_info[b].order
-    end) do
-        local sorted_subgroups = {}
-
-        for subgroup_name, recipes in spairs(subgroup_map, function(t, a, b)
-            return subgroup_info[a].order < subgroup_info[b].order
-        end) do
-            sorted_subgroups[#sorted_subgroups + 1] = {
-                name = subgroup_name,
-                recipes = recipes,
-                _self = subgroup_info[subgroup_name]
-            }
-        end
-
-        sorted_groups[#sorted_groups + 1] = {
-            name = group_name,
-            subgroups = sorted_subgroups,
-            _self = group_info[group_name]
+-- The filters handed to the game's own recipe picker.
+--
+-- Only "hidden" is asked for. A "category" filter with `invert` would drop the
+-- request/parameter pseudo-recipes too, and an "enabled" filter would be the
+-- obvious way to ask for just the unlocked ones - but "enabled" is read from
+-- the prototype's own pre-research default rather than from the player's
+-- force, so it hides everything that any technology unlocks. Recipe
+-- availability is therefore decided in Lua, by is_recipe_selectable, on the
+-- pick as well as here.
+function myRecipe.get_recipe_elem_filters()
+    if not recipe_elem_filters then
+        recipe_elem_filters = {
+            { filter = "hidden", invert = true }
         }
     end
 
-    grouped_recipes_cache = sorted_groups
-
-    return grouped_recipes_cache
-end
-
-function myRecipe.get_group_recipes()
-    if not grouped_recipes_cache then
-        return {}
-    end
-    return grouped_recipes_cache
-end
-
-local function get_icon_markup(prototype_name, prototype_type)
-    if not prototype_name or not prototype_type then
-        return ""
-    end
-
-    if prototype_type == "fluid" then
-        return "[img=fluid/" .. prototype_name .. "]"
-    elseif prototype_type == "item" then
-        return "[img=item/" .. prototype_name .. "]"
-    elseif prototype_type == "entity" then
-        return "[entity=" .. prototype_name .. "]"
-    elseif prototype_type == "recipe" then
-        return "[recipe=" .. prototype_name .. "]"
-    elseif prototype_type == "technology" then
-        return "[technology=" .. prototype_name .. "]"
-    end
-
-    return ""
-end
-
-function myRecipe.build_recipe_tooltip(recipe)
-    if not recipe then
-        return { "" }
-    end
-
-    local tooltip = { "" }
-    local recipe_name = safe_get(recipe, "localised_name") or safe_get(recipe, "name") or "Unknown recipe"
-    table.insert(tooltip, { "", "[font=default-bold]", recipe_name, "[/font]" })
-    local ingredients = safe_get(recipe, "ingredients") or {}
-    if #ingredients > 0 then
-        table.insert(tooltip, { "", "\n", "[font=default-bold]", { "quick-blueprint.ingredients" }, "[/font]" })
-        for _, ingredient in ipairs(ingredients) do
-            local ingredient_name = ingredient.name
-            local ingredient_type = ingredient.type or "item"
-            local ingredient_proto = prototypes[ingredient_type] and prototypes[ingredient_type][ingredient_name]
-            local ingredient_label = ingredient_proto and (ingredient_proto.localised_name or ingredient_name) or
-                ingredient_name
-
-            table.insert(tooltip, {
-                "",
-                "\n",
-                get_icon_markup(ingredient_name, ingredient_type),
-                ingredient_label,
-                " x ",
-                tostring(ingredient.amount or 1)
-            })
-        end
-    end
-    local crafting_time = safe_get(recipe, "energy")
-        or safe_get(recipe, "energy_required")
-        or 0.5
-    table.insert(tooltip,
-        { "", "\n", "[font=default-bold]", { "quick-blueprint.crafting-time" }, "[/font]", " ", tostring(crafting_time),
-            " s" })
-    local machines = myRecipe.get_allowed_machines_for_recipe(recipe)
-
-    if #machines > 0 then
-        table.insert(tooltip, { "", "\n", "[font=default-bold]", { "quick-blueprint.crafted-at" }, "[/font]" })
-        for i = 1, math.min(5, #machines) do
-            local machine = machines[i]
-            local machine_name = machine.localised_name or machine.name
-            table.insert(tooltip, {
-                "",
-                "\n",
-                "[entity=" .. machine.name .. "] ",
-                machine_name
-            })
-        end
-    end
-
-    return tooltip
-end
-
-function myRecipe.set_filter(str)
-    filter = str
-end
-
-function myRecipe.clear_filter()
-    filter = nil
+    return recipe_elem_filters
 end
 
 function myRecipe.get_recipe_by_name(recipe_name)
