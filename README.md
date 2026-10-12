@@ -43,7 +43,7 @@ Before releasing:
 4. Create and push the corresponding tag:
 
    ```sh
-   git tag v1.0.1
+   git tag v1.1.0
    git push origin main --tags
    ```
 
